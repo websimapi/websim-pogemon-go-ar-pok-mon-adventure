@@ -224,11 +224,16 @@
         } catch (error) {
             console.error('Failed to initialize WebsimSocket:', error);
             room = null;
+            websimAvailable = false;
         }
         
         // Check if websim services are available
         try {
-            websimAvailable = websimAvailable && typeof websim !== 'undefined' && websim.imageGen;
+            if (typeof websim !== 'undefined' && websim && websim.imageGen) {
+                websimAvailable = websimAvailable && true;
+            } else {
+                websimAvailable = false;
+            }
         } catch (error) {
             console.warn('Websim services not available - using fallback images');
             websimAvailable = false;
@@ -297,7 +302,7 @@
             };
             
             // Try to save to database if room is available
-            if (room) {
+            if (room && room.collection) {
                 try {
                     const pokemon = await room.collection('pokemon').create(pokemonData);
                     return pokemon;
@@ -362,84 +367,84 @@
             const sceneRef = useRef(null);
             
             // Get all Pokémon from database with error handling
-            let allPokemon = [];
-            try {
-                if (room && room.collection) {
-                    const pokemonCollection = room.collection('pokemon');
-                    if (pokemonCollection && pokemonCollection.getList) {
-                        allPokemon = React.useSyncExternalStore(
-                            (callback) => {
-                                try {
-                                    return pokemonCollection.subscribe(callback);
-                                } catch (error) {
-                                    console.error('Error subscribing to pokemon collection:', error);
-                                    return () => {};
-                                }
-                            },
-                            () => {
-                                try {
-                                    return pokemonCollection.getList() || [];
-                                } catch (error) {
-                                    console.error('Error getting pokemon list:', error);
-                                    return [];
-                                }
+            const [allPokemon, setAllPokemon] = useState([]);
+            const [userCaught, setUserCaught] = useState([]);
+            
+            useEffect(() => {
+                // Load pokemon from database or localStorage
+                const loadPokemon = async () => {
+                    try {
+                        if (room && room.collection) {
+                            const pokemonCollection = room.collection('pokemon');
+                            if (pokemonCollection && pokemonCollection.getList) {
+                                const pokemonList = pokemonCollection.getList() || [];
+                                setAllPokemon(pokemonList);
+                                
+                                // Set up subscription for real-time updates
+                                const unsubscribe = pokemonCollection.subscribe(() => {
+                                    const updatedList = pokemonCollection.getList() || [];
+                                    setAllPokemon(updatedList);
+                                });
+                                
+                                return () => {
+                                    if (typeof unsubscribe === 'function') {
+                                        unsubscribe();
+                                    }
+                                };
                             }
-                        );
+                        }
+                    } catch (error) {
+                        console.error('Error loading pokemon:', error);
                     }
-                }
-            } catch (error) {
-                console.error('Error accessing pokemon collection:', error);
-                allPokemon = [];
-            }
+                    
+                    // Use local pokemon if database is not available
+                    setAllPokemon(localPokemon || []);
+                };
+                
+                loadPokemon();
+            }, [localPokemon]);
             
-            // Use local pokemon if database is not available
-            if (!Array.isArray(allPokemon) || allPokemon.length === 0) {
-                allPokemon = localPokemon || [];
-            }
-            
-            // Get user's caught Pokémon with error handling
-            let userCaught = [];
-            try {
-                if (room && room.collection) {
-                    const caughtCollection = room.collection('caught_pokemon');
-                    if (caughtCollection && caughtCollection.getList) {
-                        userCaught = React.useSyncExternalStore(
-                            (callback) => {
-                                try {
-                                    return caughtCollection.subscribe(callback);
-                                } catch (error) {
-                                    console.error('Error subscribing to caught pokemon collection:', error);
-                                    return () => {};
-                                }
-                            },
-                            () => {
-                                try {
-                                    return caughtCollection.getList() || [];
-                                } catch (error) {
-                                    console.error('Error getting caught pokemon list:', error);
-                                    return [];
-                                }
+            useEffect(() => {
+                // Load caught pokemon from database or localStorage
+                const loadCaughtPokemon = async () => {
+                    try {
+                        if (room && room.collection) {
+                            const caughtCollection = room.collection('caught_pokemon');
+                            if (caughtCollection && caughtCollection.getList) {
+                                const caughtList = caughtCollection.getList() || [];
+                                setUserCaught(caughtList);
+                                
+                                // Set up subscription for real-time updates
+                                const unsubscribe = caughtCollection.subscribe(() => {
+                                    const updatedList = caughtCollection.getList() || [];
+                                    setUserCaught(updatedList);
+                                });
+                                
+                                return () => {
+                                    if (typeof unsubscribe === 'function') {
+                                        unsubscribe();
+                                    }
+                                };
                             }
-                        );
+                        }
+                    } catch (error) {
+                        console.error('Error loading caught pokemon:', error);
                     }
-                }
-            } catch (error) {
-                console.error('Error accessing caught pokemon collection:', error);
-                userCaught = [];
-            }
-            
-            // Use local storage as fallback
-            if (!Array.isArray(userCaught) || userCaught.length === 0) {
-                try {
-                    const stored = localStorage.getItem('caughtPokemon');
-                    if (stored) {
-                        userCaught = JSON.parse(stored) || [];
+                    
+                    // Use localStorage as fallback
+                    try {
+                        const stored = localStorage.getItem('caughtPokemon');
+                        if (stored) {
+                            const caughtList = JSON.parse(stored) || [];
+                            setUserCaught(caughtList);
+                        }
+                    } catch (error) {
+                        console.error('Error reading from localStorage:', error);
                     }
-                } catch (error) {
-                    console.error('Error reading from localStorage:', error);
-                    userCaught = [];
-                }
-            }
+                };
+                
+                loadCaughtPokemon();
+            }, []);
             
             useEffect(() => {
                 initializeApp();
@@ -482,7 +487,7 @@
             }, []);
             
             useEffect(() => {
-                if (userPosition && allPokemon.length > 0) {
+                if (userPosition && Array.isArray(allPokemon) && allPokemon.length > 0) {
                     spawnNearbyPokemon();
                 }
             }, [userPosition, allPokemon]);
@@ -541,20 +546,7 @@
                     // Wait for existing pokemon to load or generate new ones
                     setTimeout(async () => {
                         try {
-                            let currentPokemon = [];
-                            
-                            // Try to get from database first
-                            if (room && room.collection) {
-                                try {
-                                    const pokemonCollection = room.collection('pokemon');
-                                    if (pokemonCollection && pokemonCollection.getList) {
-                                        currentPokemon = pokemonCollection.getList() || [];
-                                    }
-                                } catch (error) {
-                                    console.error('Error getting pokemon from database:', error);
-                                    currentPokemon = [];
-                                }
-                            }
+                            let currentPokemon = allPokemon || [];
                             
                             // Generate local pokemon if database is empty or unavailable
                             if (!Array.isArray(currentPokemon) || currentPokemon.length < 5) {
@@ -573,6 +565,7 @@
                                 // Store locally if database is not available
                                 if (!room || newPokemon.length > 0) {
                                     setLocalPokemon(newPokemon);
+                                    setAllPokemon(newPokemon);
                                 }
                             }
                             
@@ -696,6 +689,7 @@
                                 const caughtList = stored ? JSON.parse(stored) : [];
                                 caughtList.push(caughtData);
                                 localStorage.setItem('caughtPokemon', JSON.stringify(caughtList));
+                                setUserCaught(caughtList);
                             } catch (storageError) {
                                 console.error('Failed to save to localStorage:', storageError);
                             }
@@ -707,6 +701,7 @@
                             const caughtList = stored ? JSON.parse(stored) : [];
                             caughtList.push(caughtData);
                             localStorage.setItem('caughtPokemon', JSON.stringify(caughtList));
+                            setUserCaught(caughtList);
                         } catch (error) {
                             console.error('Failed to save to localStorage:', error);
                         }
@@ -749,7 +744,10 @@
             root.render(<App />);
         } catch (error) {
             console.error('Failed to initialize React app:', error);
-            document.getElementById('loading').innerHTML = '<div>Failed to initialize app. Please refresh the page.</div>';
+            const loadingEl = document.getElementById('loading');
+            if (loadingEl) {
+                loadingEl.innerHTML = '<div>Failed to initialize app. Please refresh the page.</div>';
+            }
         }
         
         // Hide loading when AR is ready

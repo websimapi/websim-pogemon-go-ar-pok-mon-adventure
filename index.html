@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pogemon GO - AR Pokémon Adventure</title>
+    <script src="https://aframe.io/releases/1.4.0/aframe.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/AR-js-org/AR.js/aframe/build/aframe-ar.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react@18/umd/react.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            font-family: 'Arial', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            overflow: hidden;
+        }
+        
+        #ui-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1000;
+            pointer-events: none;
+        }
+        
+        .ui-element {
+            pointer-events: auto;
+        }
+        
+        .top-bar {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(0,0,0,0.7);
+            padding: 15px;
+            border-radius: 20px;
+            color: white;
+            backdrop-filter: blur(10px);
+        }
+        
+        .catch-button {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+            border: 4px solid white;
+            box-shadow: 0 0 20px rgba(255,107,107,0.5);
+            font-size: 16px;
+            font-weight: bold;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: none;
+        }
+        
+        .catch-button:hover {
+            transform: translateX(-50%) scale(1.1);
+            box-shadow: 0 0 30px rgba(255,107,107,0.8);
+        }
+        
+        .catch-button.visible {
+            display: block;
+        }
+        
+        .pokemon-list {
+            position: absolute;
+            top: 100px;
+            left: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.8);
+            border-radius: 15px;
+            padding: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+            backdrop-filter: blur(10px);
+        }
+        
+        .pokemon-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: rgba(255,255,255,0.1);
+            border-radius: 10px;
+            color: white;
+        }
+        
+        .pokemon-image {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            margin-right: 15px;
+            border: 2px solid #fff;
+        }
+        
+        .pokemon-stats {
+            flex: 1;
+        }
+        
+        .pokemon-name {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+        }
+        
+        .pokemon-type {
+            font-size: 14px;
+            opacity: 0.8;
+        }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 18px;
+            text-align: center;
+        }
+        
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .notification {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 15px;
+            font-size: 18px;
+            text-align: center;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        .notification.show {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+    <div id="ui-overlay">
+        <div class="top-bar ui-element">
+            <div>
+                <div>Pogemon GO</div>
+                <div id="location-info" style="font-size: 12px; opacity: 0.8;"></div>
+            </div>
+            <div>
+                <span id="pokemon-count">Caught: 0</span>
+            </div>
+        </div>
+        
+        <button id="catch-button" class="catch-button ui-element">
+            CATCH!
+        </button>
+        
+        <div id="loading" class="loading ui-element">
+            <div class="spinner"></div>
+            <div>Initializing AR Camera...</div>
+        </div>
+        
+        <div id="notification" class="notification ui-element"></div>
+    </div>
+
+    <a-scene
+        id="ar-scene"
+        vr-mode-ui="enabled: false"
+        embedded
+        arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix; matrixCodeType: 3x3;"
+        renderer="logarithmicDepthBuffer: true; colorManagement: true; sortObjects: true;">
+        
+        <a-assets>
+            <a-asset-item id="pokeball" src="data:model/gltf+json;base64,eyJ..."></a-asset-item>
+        </a-assets>
+        
+        <a-camera id="ar-camera" gps-camera rotation-reader></a-camera>
+        
+        <a-light type="ambient" color="#ffffff" intensity="0.5"></a-light>
+        <a-light type="directional" color="#ffffff" intensity="1" position="0 5 0"></a-light>
+    </a-scene>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        // Initialize WebsimSocket
+        const room = new WebsimSocket();
+        
+        // Pokémon generation utilities
+        const pokemonTypes = ['Fire', 'Water', 'Grass', 'Electric', 'Psychic', 'Ice', 'Dragon', 'Flying', 'Ghost', 'Fighting'];
+        const pokemonNamePrefixes = ['Pika', 'Char', 'Bulba', 'Squir', 'Jiggly', 'Psyd', 'Mew', 'Eev', 'Drago', 'Volt'];
+        const pokemonNameSuffixes = ['mon', 'chu', 'saur', 'tle', 'puff', 'duck', 'two', 'ee', 'nite', 'orb'];
+        
+        function generatePokemonName() {
+            const prefix = pokemonNamePrefixes[Math.floor(Math.random() * pokemonNamePrefixes.length)];
+            const suffix = pokemonNameSuffixes[Math.floor(Math.random() * pokemonNameSuffixes.length)];
+            return prefix + suffix;
+        }
+        
+        function generatePokemonStats() {
+            return {
+                hp: Math.floor(Math.random() * 100) + 50,
+                attack: Math.floor(Math.random() * 100) + 30,
+                defense: Math.floor(Math.random() * 100) + 30,
+                speed: Math.floor(Math.random() * 100) + 20
+            };
+        }
+        
+        async function generatePokemon() {
+            const name = generatePokemonName();
+            const type = pokemonTypes[Math.floor(Math.random() * pokemonTypes.length)];
+            const stats = generatePokemonStats();
+            
+            // Generate AI image for the Pokémon
+            const imageResult = await websim.imageGen({
+                prompt: `A cute cartoon ${type.toLowerCase()} type pokemon creature called ${name}, colorful, friendly, anime style, transparent background`,
+                transparent: true,
+                aspect: "1:1"
+            });
+            
+            const pokemon = await room.collection('pokemon').create({
+                name,
+                type,
+                stats,
+                image_url: imageResult.url,
+                rarity: Math.random() < 0.1 ? 'rare' : Math.random() < 0.3 ? 'uncommon' : 'common'
+            });
+            
+            return pokemon;
+        }
+        
+        // GPS and spawn utilities
+        function getDistanceFromLatLonInKm(lat1, lon1, lat2, lon2) {
+            const R = 6371; // Radius of the earth in km
+            const dLat = deg2rad(lat2 - lat1);
+            const dLon = deg2rad(lon2 - lon1);
+            const a = 
+                Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) * 
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+            const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            const d = R * c; // Distance in km
+            return d;
+        }
+        
+        function deg2rad(deg) {
+            return deg * (Math.PI/180);
+        }
+        
+        function generateSpawnLocation(centerLat, centerLon, radiusKm = 0.1) {
+            const y0 = centerLat;
+            const x0 = centerLon;
+            const rd = radiusKm / 111.32; // Convert km to degrees
+            
+            const u = Math.random();
+            const v = Math.random();
+            const w = rd * Math.sqrt(u);
+            const t = 2 * Math.PI * v;
+            const x = w * Math.cos(t);
+            const y = w * Math.sin(t);
+            
+            return {
+                lat: y + y0,
+                lon: x + x0
+            };
+        }
+        
+        // Main App Component
+        function App() {
+            const [userPosition, setUserPosition] = useState(null);
+            const [nearbyPokemon, setNearbyPokemon] = useState([]);
+            const [caughtPokemon, setCaughtPokemon] = useState([]);
+            const [currentTarget, setCurrentTarget] = useState(null);
+            const [isLoading, setIsLoading] = useState(true);
+            const [notification, setNotification] = useState('');
+            const sceneRef = useRef(null);
+            
+            // Get all Pokémon from database
+            const allPokemon = React.useSyncExternalStore(
+                room.collection('pokemon').subscribe,
+                room.collection('pokemon').getList
+            );
+            
+            // Get user's caught Pokémon
+            const userCaught = React.useSyncExternalStore(
+                room.collection('caught_pokemon').subscribe,
+                room.collection('caught_pokemon').getList
+            );
+            
+            useEffect(() => {
+                initializeApp();
+            }, []);
+            
+            useEffect(() => {
+                if (userPosition) {
+                    spawnNearbyPokemon();
+                }
+            }, [userPosition, allPokemon]);
+            
+            useEffect(() => {
+                setCaughtPokemon(userCaught);
+            }, [userCaught]);
+            
+            async function initializeApp() {
+                try {
+                    // Request location permission
+                    const position = await new Promise((resolve, reject) => {
+                        navigator.geolocation.getCurrentPosition(resolve, reject, {
+                            enableHighAccuracy: true,
+                            timeout: 10000,
+                            maximumAge: 60000
+                        });
+                    });
+                    
+                    setUserPosition({
+                        lat: position.coords.latitude,
+                        lon: position.coords.longitude
+                    });
+                    
+                    // Ensure we have some Pokémon in the database
+                    if (allPokemon.length < 10) {
+                        for (let i = 0; i < 5; i++) {
+                            await generatePokemon();
+                        }
+                    }
+                    
+                    setIsLoading(false);
+                    showNotification('AR Camera Ready! Look around to find Pokémon!');
+                    
+                } catch (error) {
+                    console.error('Error initializing:', error);
+                    setIsLoading(false);
+                    showNotification('Please enable location access to play');
+                }
+            }
+            
+            function spawnNearbyPokemon() {
+                if (!userPosition || allPokemon.length === 0) return;
+                
+                // Generate 1-3 spawn locations near the user
+                const spawnCount = Math.floor(Math.random() * 3) + 1;
+                const spawns = [];
+                
+                for (let i = 0; i < spawnCount; i++) {
+                    const spawnLocation = generateSpawnLocation(userPosition.lat, userPosition.lon);
+                    const randomPokemon = allPokemon[Math.floor(Math.random() * allPokemon.length)];
+                    
+                    spawns.push({
+                        ...randomPokemon,
+                        spawnLat: spawnLocation.lat,
+                        spawnLon: spawnLocation.lon,
+                        distance: getDistanceFromLatLonInKm(
+                            userPosition.lat, 
+                            userPosition.lon, 
+                            spawnLocation.lat, 
+                            spawnLocation.lon
+                        )
+                    });
+                }
+                
+                setNearbyPokemon(spawns);
+                updateARScene(spawns);
+            }
+            
+            function updateARScene(spawns) {
+                const scene = document.querySelector('#ar-scene');
+                
+                // Clear existing pokemon entities
+                const existingPokemon = scene.querySelectorAll('.pokemon-entity');
+                existingPokemon.forEach(entity => entity.remove());
+                
+                // Add new pokemon entities
+                spawns.forEach((pokemon, index) => {
+                    const entity = document.createElement('a-entity');
+                    entity.classList.add('pokemon-entity');
+                    entity.setAttribute('id', `pokemon-${index}`);
+                    
+                    // Create image plane for the pokemon
+                    const image = document.createElement('a-image');
+                    image.setAttribute('src', pokemon.image_url);
+                    image.setAttribute('width', '2');
+                    image.setAttribute('height', '2');
+                    image.setAttribute('position', `${(index - 1) * 3} 0 -5`);
+                    image.setAttribute('look-at', '#ar-camera');
+                    image.setAttribute('animation', 'property: rotation; to: 0 360 0; loop: true; dur: 8000');
+                    
+                    // Add click handler
+                    image.addEventListener('click', () => {
+                        setCurrentTarget(pokemon);
+                        document.getElementById('catch-button').classList.add('visible');
+                    });
+                    
+                    entity.appendChild(image);
+                    scene.appendChild(entity);
+                });
+            }
+            
+            async function catchPokemon() {
+                if (!currentTarget) return;
+                
+                try {
+                    await room.collection('caught_pokemon').create({
+                        pokemon_id: currentTarget.id,
+                        pokemon_name: currentTarget.name,
+                        pokemon_type: currentTarget.type,
+                        pokemon_image: currentTarget.image_url,
+                        caught_at: new Date().toISOString()
+                    });
+                    
+                    showNotification(`Caught ${currentTarget.name}!`);
+                    setCurrentTarget(null);
+                    document.getElementById('catch-button').classList.remove('visible');
+                    
+                    // Respawn pokemon after catching
+                    setTimeout(() => {
+                        spawnNearbyPokemon();
+                    }, 2000);
+                    
+                } catch (error) {
+                    console.error('Error catching pokemon:', error);
+                    showNotification('Failed to catch Pokémon. Try again!');
+                }
+            }
+            
+            function showNotification(message) {
+                setNotification(message);
+                const notificationEl = document.getElementById('notification');
+                notificationEl.classList.add('show');
+                
+                setTimeout(() => {
+                    notificationEl.classList.remove('show');
+                }, 3000);
+            }
+            
+            return null; // UI is handled by direct DOM manipulation
+        }
+        
+        // Initialize the app
+        ReactDOM.render(<App />, document.createElement('div'));
+        
+        // Set up catch button handler
+        document.getElementById('catch-button').addEventListener('click', () => {
+            // This will be handled by the React component
+            const event = new CustomEvent('catchPokemon');
+            window.dispatchEvent(event);
+        });
+        
+        // Update location info
+        navigator.geolocation.watchPosition((position) => {
+            const locationInfo = document.getElementById('location-info');
+            locationInfo.textContent = `Lat: ${position.coords.latitude.toFixed(4)}, Lon: ${position.coords.longitude.toFixed(4)}`;
+        });
+        
+        // Update pokemon count
+        setInterval(() => {
+            const countEl = document.getElementById('pokemon-count');
+            const caughtCount = document.querySelectorAll('.caught-pokemon').length;
+            countEl.textContent = `Caught: ${caughtCount}`;
+        }, 1000);
+        
+        // Hide loading when AR is ready
+        window.addEventListener('camera-init', () => {
+            document.getElementById('loading').style.display = 'none';
+        });
+    </script>
+<script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
+</body>
+</html>
+

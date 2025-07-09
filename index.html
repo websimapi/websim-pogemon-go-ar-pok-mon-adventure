@@ -209,20 +209,41 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
         
-        // Initialize WebsimSocket with error handling
-        let room;
+        // Initialize WebsimSocket with comprehensive error handling
+        let room = null;
+        let websimAvailable = false;
+        
         try {
-            room = new WebsimSocket();
-            console.log('WebsimSocket initialized successfully');
+            if (typeof WebsimSocket !== 'undefined') {
+                room = new WebsimSocket();
+                console.log('WebsimSocket initialized successfully');
+            } else {
+                console.warn('WebsimSocket not available - using fallback mode');
+            }
         } catch (error) {
             console.error('Failed to initialize WebsimSocket:', error);
-            room = null;
+        }
+        
+        // Check if websim services are available
+        try {
+            websimAvailable = typeof websim !== 'undefined' && websim.imageGen;
+        } catch (error) {
+            console.warn('Websim services not available - using fallback images');
         }
         
         // Pokémon generation utilities
         const pokemonTypes = ['Fire', 'Water', 'Grass', 'Electric', 'Psychic', 'Ice', 'Dragon', 'Flying', 'Ghost', 'Fighting'];
         const pokemonNamePrefixes = ['Pika', 'Char', 'Bulba', 'Squir', 'Jiggly', 'Psyd', 'Mew', 'Eev', 'Drago', 'Volt'];
         const pokemonNameSuffixes = ['mon', 'chu', 'saur', 'tle', 'puff', 'duck', 'two', 'ee', 'nite', 'orb'];
+        
+        // Fallback Pokemon images
+        const fallbackPokemonImages = [
+            'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/25.png',
+            'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/1.png',
+            'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/4.png',
+            'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/7.png',
+            'https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/150.png'
+        ];
         
         function generatePokemonName() {
             const prefix = pokemonNamePrefixes[Math.floor(Math.random() * pokemonNamePrefixes.length)];
@@ -244,22 +265,49 @@
             const type = pokemonTypes[Math.floor(Math.random() * pokemonTypes.length)];
             const stats = generatePokemonStats();
             
-            // Generate AI image for the Pokémon
-            const imageResult = await websim.imageGen({
-                prompt: `A cute cartoon ${type.toLowerCase()} type pokemon creature called ${name}, colorful, friendly, anime style, transparent background`,
-                transparent: true,
-                aspect: "1:1"
-            });
+            let imageUrl = fallbackPokemonImages[Math.floor(Math.random() * fallbackPokemonImages.length)];
             
-            const pokemon = await room.collection('pokemon').create({
+            // Try to generate AI image if websim is available
+            if (websimAvailable) {
+                try {
+                    const imageResult = await websim.imageGen({
+                        prompt: `A cute cartoon ${type.toLowerCase()} type pokemon creature called ${name}, colorful, friendly, anime style, transparent background`,
+                        transparent: true,
+                        aspect: "square"
+                    });
+                    
+                    if (imageResult && imageResult.url) {
+                        imageUrl = imageResult.url;
+                    }
+                } catch (error) {
+                    console.error('Failed to generate AI image:', error);
+                    // Will use fallback image
+                }
+            }
+            
+            const pokemonData = {
                 name,
                 type,
                 stats,
-                image_url: imageResult.url,
+                image_url: imageUrl,
                 rarity: Math.random() < 0.1 ? 'rare' : Math.random() < 0.3 ? 'uncommon' : 'common'
-            });
+            };
             
-            return pokemon;
+            // Try to save to database if room is available
+            if (room) {
+                try {
+                    const pokemon = await room.collection('pokemon').create(pokemonData);
+                    return pokemon;
+                } catch (error) {
+                    console.error('Failed to save pokemon to database:', error);
+                }
+            }
+            
+            // Return pokemon data even if database save fails
+            return {
+                ...pokemonData,
+                id: Date.now() + Math.random() // Generate a temporary ID
+            };
         }
         
         // GPS and spawn utilities
@@ -307,27 +355,53 @@
             const [isLoading, setIsLoading] = useState(true);
             const [notification, setNotification] = useState('');
             const [locationInfo, setLocationInfo] = useState('');
+            const [localPokemon, setLocalPokemon] = useState([]); // Fallback local storage
             const sceneRef = useRef(null);
             
             // Get all Pokémon from database with error handling
-            const allPokemon = room ? React.useSyncExternalStore(
-                room.collection('pokemon').subscribe,
-                room.collection('pokemon').getList
-            ) : [];
+            let allPokemon = [];
+            try {
+                if (room) {
+                    allPokemon = React.useSyncExternalStore(
+                        room.collection('pokemon').subscribe,
+                        room.collection('pokemon').getList
+                    );
+                }
+            } catch (error) {
+                console.error('Error accessing pokemon collection:', error);
+            }
+            
+            // Use local pokemon if database is not available
+            if (!allPokemon || allPokemon.length === 0) {
+                allPokemon = localPokemon;
+            }
             
             // Get user's caught Pokémon with error handling
-            const userCaught = room ? React.useSyncExternalStore(
-                room.collection('caught_pokemon').subscribe,
-                room.collection('caught_pokemon').getList
-            ) : [];
+            let userCaught = [];
+            try {
+                if (room) {
+                    userCaught = React.useSyncExternalStore(
+                        room.collection('caught_pokemon').subscribe,
+                        room.collection('caught_pokemon').getList
+                    );
+                }
+            } catch (error) {
+                console.error('Error accessing caught pokemon collection:', error);
+            }
+            
+            // Use local storage as fallback
+            if (!userCaught || userCaught.length === 0) {
+                try {
+                    const stored = localStorage.getItem('caughtPokemon');
+                    if (stored) {
+                        userCaught = JSON.parse(stored);
+                    }
+                } catch (error) {
+                    console.error('Error reading from localStorage:', error);
+                }
+            }
             
             useEffect(() => {
-                if (!room) {
-                    setIsLoading(false);
-                    setNotification('Failed to initialize database connection');
-                    return;
-                }
-                
                 initializeApp();
                 
                 // Set up catch button handler
@@ -379,7 +453,7 @@
                 // Update pokemon count in DOM
                 const countEl = document.getElementById('pokemon-count');
                 if (countEl) {
-                    countEl.textContent = `Caught: ${userCaught.length}`;
+                    countEl.textContent = `Caught: ${Array.isArray(userCaught) ? userCaught.length : 0}`;
                 }
             }, [userCaught]);
             
@@ -427,19 +501,41 @@
                     // Wait for existing pokemon to load or generate new ones
                     setTimeout(async () => {
                         try {
-                            const currentPokemon = room.collection('pokemon').getList();
+                            let currentPokemon = [];
+                            
+                            // Try to get from database first
+                            if (room) {
+                                try {
+                                    currentPokemon = room.collection('pokemon').getList();
+                                } catch (error) {
+                                    console.error('Error getting pokemon from database:', error);
+                                }
+                            }
+                            
+                            // Generate local pokemon if database is empty or unavailable
                             if (currentPokemon.length < 5) {
+                                const newPokemon = [];
                                 for (let i = 0; i < 5; i++) {
-                                    await generatePokemon();
+                                    try {
+                                        const pokemon = await generatePokemon();
+                                        newPokemon.push(pokemon);
+                                    } catch (error) {
+                                        console.error('Error generating pokemon:', error);
+                                    }
+                                }
+                                
+                                // Store locally if database is not available
+                                if (!room) {
+                                    setLocalPokemon(newPokemon);
                                 }
                             }
                             
                             setIsLoading(false);
                             setNotification('AR Camera Ready! Look around to find Pokémon!');
                         } catch (error) {
-                            console.error('Error generating Pokemon:', error);
+                            console.error('Error initializing Pokemon:', error);
                             setIsLoading(false);
-                            setNotification('Failed to load Pokémon. Please refresh the page.');
+                            setNotification('App initialized with limited functionality. Some features may not work.');
                         }
                     }, 1000);
                     
@@ -461,17 +557,19 @@
                     const spawnLocation = generateSpawnLocation(userPosition.lat, userPosition.lon);
                     const randomPokemon = allPokemon[Math.floor(Math.random() * allPokemon.length)];
                     
-                    spawns.push({
-                        ...randomPokemon,
-                        spawnLat: spawnLocation.lat,
-                        spawnLon: spawnLocation.lon,
-                        distance: getDistanceFromLatLonInKm(
-                            userPosition.lat, 
-                            userPosition.lon, 
-                            spawnLocation.lat, 
-                            spawnLocation.lon
-                        )
-                    });
+                    if (randomPokemon) {
+                        spawns.push({
+                            ...randomPokemon,
+                            spawnLat: spawnLocation.lat,
+                            spawnLon: spawnLocation.lon,
+                            distance: getDistanceFromLatLonInKm(
+                                userPosition.lat, 
+                                userPosition.lon, 
+                                spawnLocation.lat, 
+                                spawnLocation.lon
+                            )
+                        });
+                    }
                 }
                 
                 setNearbyPokemon(spawns);
@@ -488,6 +586,8 @@
                 
                 // Add new pokemon entities
                 spawns.forEach((pokemon, index) => {
+                    if (!pokemon || !pokemon.image_url) return;
+                    
                     const entity = document.createElement('a-entity');
                     entity.classList.add('pokemon-entity');
                     entity.setAttribute('id', `pokemon-${index}`);
@@ -516,16 +616,44 @@
             }
             
             async function catchPokemon() {
-                if (!currentTarget || !room) return;
+                if (!currentTarget) return;
                 
                 try {
-                    await room.collection('caught_pokemon').create({
+                    const caughtData = {
                         pokemon_id: currentTarget.id,
                         pokemon_name: currentTarget.name,
                         pokemon_type: currentTarget.type,
                         pokemon_image: currentTarget.image_url,
                         caught_at: new Date().toISOString()
-                    });
+                    };
+                    
+                    // Try to save to database
+                    if (room) {
+                        try {
+                            await room.collection('caught_pokemon').create(caughtData);
+                        } catch (error) {
+                            console.error('Failed to save to database:', error);
+                            // Save to localStorage as fallback
+                            try {
+                                const stored = localStorage.getItem('caughtPokemon');
+                                const caughtList = stored ? JSON.parse(stored) : [];
+                                caughtList.push(caughtData);
+                                localStorage.setItem('caughtPokemon', JSON.stringify(caughtList));
+                            } catch (storageError) {
+                                console.error('Failed to save to localStorage:', storageError);
+                            }
+                        }
+                    } else {
+                        // Save to localStorage if room is not available
+                        try {
+                            const stored = localStorage.getItem('caughtPokemon');
+                            const caughtList = stored ? JSON.parse(stored) : [];
+                            caughtList.push(caughtData);
+                            localStorage.setItem('caughtPokemon', JSON.stringify(caughtList));
+                        } catch (error) {
+                            console.error('Failed to save to localStorage:', error);
+                        }
+                    }
                     
                     setNotification(`Caught ${currentTarget.name}!`);
                     setCurrentTarget(null);
@@ -558,9 +686,14 @@
         reactContainer.id = 'react-container';
         document.body.appendChild(reactContainer);
         
-        // Initialize the app
-        const root = ReactDOM.createRoot(reactContainer);
-        root.render(<App />);
+        // Initialize the app with error handling
+        try {
+            const root = ReactDOM.createRoot(reactContainer);
+            root.render(<App />);
+        } catch (error) {
+            console.error('Failed to initialize React app:', error);
+            document.getElementById('loading').innerHTML = '<div>Failed to initialize app. Please refresh the page.</div>';
+        }
         
         // Hide loading when AR is ready
         window.addEventListener('camera-init', () => {

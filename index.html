@@ -299,6 +299,7 @@
             const [currentTarget, setCurrentTarget] = useState(null);
             const [isLoading, setIsLoading] = useState(true);
             const [notification, setNotification] = useState('');
+            const [locationInfo, setLocationInfo] = useState('');
             const sceneRef = useRef(null);
             
             // Get all Pokémon from database
@@ -315,17 +316,74 @@
             
             useEffect(() => {
                 initializeApp();
+                
+                // Set up catch button handler
+                const catchButton = document.getElementById('catch-button');
+                if (catchButton) {
+                    catchButton.addEventListener('click', catchPokemon);
+                }
+                
+                // Set up location watcher
+                const watchId = navigator.geolocation.watchPosition((position) => {
+                    const locationInfoText = `Lat: ${position.coords.latitude.toFixed(4)}, Lon: ${position.coords.longitude.toFixed(4)}`;
+                    setLocationInfo(locationInfoText);
+                    
+                    const locationEl = document.getElementById('location-info');
+                    if (locationEl) {
+                        locationEl.textContent = locationInfoText;
+                    }
+                }, (error) => {
+                    console.error('Location error:', error);
+                }, {
+                    enableHighAccuracy: true,
+                    timeout: 10000,
+                    maximumAge: 60000
+                });
+                
+                return () => {
+                    navigator.geolocation.clearWatch(watchId);
+                    if (catchButton) {
+                        catchButton.removeEventListener('click', catchPokemon);
+                    }
+                };
             }, []);
             
             useEffect(() => {
-                if (userPosition) {
+                if (userPosition && allPokemon.length > 0) {
                     spawnNearbyPokemon();
                 }
             }, [userPosition, allPokemon]);
             
             useEffect(() => {
                 setCaughtPokemon(userCaught);
+                
+                // Update pokemon count in DOM
+                const countEl = document.getElementById('pokemon-count');
+                if (countEl) {
+                    countEl.textContent = `Caught: ${userCaught.length}`;
+                }
             }, [userCaught]);
+            
+            useEffect(() => {
+                const notificationEl = document.getElementById('notification');
+                if (notificationEl && notification) {
+                    notificationEl.textContent = notification;
+                    notificationEl.classList.add('show');
+                    
+                    const timer = setTimeout(() => {
+                        notificationEl.classList.remove('show');
+                    }, 3000);
+                    
+                    return () => clearTimeout(timer);
+                }
+            }, [notification]);
+            
+            useEffect(() => {
+                const loadingEl = document.getElementById('loading');
+                if (loadingEl) {
+                    loadingEl.style.display = isLoading ? 'block' : 'none';
+                }
+            }, [isLoading]);
             
             async function initializeApp() {
                 try {
@@ -343,20 +401,23 @@
                         lon: position.coords.longitude
                     });
                     
-                    // Ensure we have some Pokémon in the database
-                    if (allPokemon.length < 10) {
-                        for (let i = 0; i < 5; i++) {
-                            await generatePokemon();
+                    // Wait for existing pokemon to load or generate new ones
+                    setTimeout(async () => {
+                        const currentPokemon = room.collection('pokemon').getList();
+                        if (currentPokemon.length < 5) {
+                            for (let i = 0; i < 5; i++) {
+                                await generatePokemon();
+                            }
                         }
-                    }
-                    
-                    setIsLoading(false);
-                    showNotification('AR Camera Ready! Look around to find Pokémon!');
+                        
+                        setIsLoading(false);
+                        setNotification('AR Camera Ready! Look around to find Pokémon!');
+                    }, 1000);
                     
                 } catch (error) {
                     console.error('Error initializing:', error);
                     setIsLoading(false);
-                    showNotification('Please enable location access to play');
+                    setNotification('Please enable location access to play');
                 }
             }
             
@@ -390,6 +451,7 @@
             
             function updateARScene(spawns) {
                 const scene = document.querySelector('#ar-scene');
+                if (!scene) return;
                 
                 // Clear existing pokemon entities
                 const existingPokemon = scene.querySelectorAll('.pokemon-entity');
@@ -413,7 +475,10 @@
                     // Add click handler
                     image.addEventListener('click', () => {
                         setCurrentTarget(pokemon);
-                        document.getElementById('catch-button').classList.add('visible');
+                        const catchButton = document.getElementById('catch-button');
+                        if (catchButton) {
+                            catchButton.classList.add('visible');
+                        }
                     });
                     
                     entity.appendChild(image);
@@ -433,9 +498,13 @@
                         caught_at: new Date().toISOString()
                     });
                     
-                    showNotification(`Caught ${currentTarget.name}!`);
+                    setNotification(`Caught ${currentTarget.name}!`);
                     setCurrentTarget(null);
-                    document.getElementById('catch-button').classList.remove('visible');
+                    
+                    const catchButton = document.getElementById('catch-button');
+                    if (catchButton) {
+                        catchButton.classList.remove('visible');
+                    }
                     
                     // Respawn pokemon after catching
                     setTimeout(() => {
@@ -444,52 +513,34 @@
                     
                 } catch (error) {
                     console.error('Error catching pokemon:', error);
-                    showNotification('Failed to catch Pokémon. Try again!');
+                    setNotification('Failed to catch Pokémon. Try again!');
                 }
             }
             
             function showNotification(message) {
                 setNotification(message);
-                const notificationEl = document.getElementById('notification');
-                notificationEl.classList.add('show');
-                
-                setTimeout(() => {
-                    notificationEl.classList.remove('show');
-                }, 3000);
             }
             
             return null; // UI is handled by direct DOM manipulation
         }
         
+        // Create a container for React and render the app
+        const reactContainer = document.createElement('div');
+        reactContainer.id = 'react-container';
+        document.body.appendChild(reactContainer);
+        
         // Initialize the app
-        ReactDOM.render(<App />, document.createElement('div'));
-        
-        // Set up catch button handler
-        document.getElementById('catch-button').addEventListener('click', () => {
-            // This will be handled by the React component
-            const event = new CustomEvent('catchPokemon');
-            window.dispatchEvent(event);
-        });
-        
-        // Update location info
-        navigator.geolocation.watchPosition((position) => {
-            const locationInfo = document.getElementById('location-info');
-            locationInfo.textContent = `Lat: ${position.coords.latitude.toFixed(4)}, Lon: ${position.coords.longitude.toFixed(4)}`;
-        });
-        
-        // Update pokemon count
-        setInterval(() => {
-            const countEl = document.getElementById('pokemon-count');
-            const caughtCount = document.querySelectorAll('.caught-pokemon').length;
-            countEl.textContent = `Caught: ${caughtCount}`;
-        }, 1000);
+        const root = ReactDOM.createRoot(reactContainer);
+        root.render(<App />);
         
         // Hide loading when AR is ready
         window.addEventListener('camera-init', () => {
-            document.getElementById('loading').style.display = 'none';
+            const loadingEl = document.getElementById('loading');
+            if (loadingEl) {
+                loadingEl.style.display = 'none';
+            }
         });
     </script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v8c78df7c7c0f484497ecbca7046644da1771523124516" integrity="sha512-8DS7rgIrAmghBFwoOTujcf6D9rXvH8xm8JQ1Ja01h9QX8EzXldiszufYa4IFfKdLUKTTrnSFXLDkUEOTrZQ8Qg==" data-cf-beacon='{"version":"2024.11.0","token":"4c6229722a6346bc8eb5cb0e5eae5d41","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 </body>
 </html>
-

@@ -209,8 +209,15 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
         
-        // Initialize WebsimSocket
-        const room = new WebsimSocket();
+        // Initialize WebsimSocket with error handling
+        let room;
+        try {
+            room = new WebsimSocket();
+            console.log('WebsimSocket initialized successfully');
+        } catch (error) {
+            console.error('Failed to initialize WebsimSocket:', error);
+            room = null;
+        }
         
         // Pokémon generation utilities
         const pokemonTypes = ['Fire', 'Water', 'Grass', 'Electric', 'Psychic', 'Ice', 'Dragon', 'Flying', 'Ghost', 'Fighting'];
@@ -302,19 +309,25 @@
             const [locationInfo, setLocationInfo] = useState('');
             const sceneRef = useRef(null);
             
-            // Get all Pokémon from database
-            const allPokemon = React.useSyncExternalStore(
+            // Get all Pokémon from database with error handling
+            const allPokemon = room ? React.useSyncExternalStore(
                 room.collection('pokemon').subscribe,
                 room.collection('pokemon').getList
-            );
+            ) : [];
             
-            // Get user's caught Pokémon
-            const userCaught = React.useSyncExternalStore(
+            // Get user's caught Pokémon with error handling
+            const userCaught = room ? React.useSyncExternalStore(
                 room.collection('caught_pokemon').subscribe,
                 room.collection('caught_pokemon').getList
-            );
+            ) : [];
             
             useEffect(() => {
+                if (!room) {
+                    setIsLoading(false);
+                    setNotification('Failed to initialize database connection');
+                    return;
+                }
+                
                 initializeApp();
                 
                 // Set up catch button handler
@@ -324,24 +337,30 @@
                 }
                 
                 // Set up location watcher
-                const watchId = navigator.geolocation.watchPosition((position) => {
-                    const locationInfoText = `Lat: ${position.coords.latitude.toFixed(4)}, Lon: ${position.coords.longitude.toFixed(4)}`;
-                    setLocationInfo(locationInfoText);
-                    
-                    const locationEl = document.getElementById('location-info');
-                    if (locationEl) {
-                        locationEl.textContent = locationInfoText;
-                    }
-                }, (error) => {
-                    console.error('Location error:', error);
-                }, {
-                    enableHighAccuracy: true,
-                    timeout: 10000,
-                    maximumAge: 60000
-                });
+                let watchId;
+                if (navigator.geolocation) {
+                    watchId = navigator.geolocation.watchPosition((position) => {
+                        const locationInfoText = `Lat: ${position.coords.latitude.toFixed(4)}, Lon: ${position.coords.longitude.toFixed(4)}`;
+                        setLocationInfo(locationInfoText);
+                        
+                        const locationEl = document.getElementById('location-info');
+                        if (locationEl) {
+                            locationEl.textContent = locationInfoText;
+                        }
+                    }, (error) => {
+                        console.error('Location error:', error);
+                        setNotification('Location access denied. Please enable location services.');
+                    }, {
+                        enableHighAccuracy: true,
+                        timeout: 10000,
+                        maximumAge: 60000
+                    });
+                }
                 
                 return () => {
-                    navigator.geolocation.clearWatch(watchId);
+                    if (watchId) {
+                        navigator.geolocation.clearWatch(watchId);
+                    }
                     if (catchButton) {
                         catchButton.removeEventListener('click', catchPokemon);
                     }
@@ -387,6 +406,10 @@
             
             async function initializeApp() {
                 try {
+                    if (!navigator.geolocation) {
+                        throw new Error('Geolocation is not supported by this browser');
+                    }
+                    
                     // Request location permission
                     const position = await new Promise((resolve, reject) => {
                         navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -403,15 +426,21 @@
                     
                     // Wait for existing pokemon to load or generate new ones
                     setTimeout(async () => {
-                        const currentPokemon = room.collection('pokemon').getList();
-                        if (currentPokemon.length < 5) {
-                            for (let i = 0; i < 5; i++) {
-                                await generatePokemon();
+                        try {
+                            const currentPokemon = room.collection('pokemon').getList();
+                            if (currentPokemon.length < 5) {
+                                for (let i = 0; i < 5; i++) {
+                                    await generatePokemon();
+                                }
                             }
+                            
+                            setIsLoading(false);
+                            setNotification('AR Camera Ready! Look around to find Pokémon!');
+                        } catch (error) {
+                            console.error('Error generating Pokemon:', error);
+                            setIsLoading(false);
+                            setNotification('Failed to load Pokémon. Please refresh the page.');
                         }
-                        
-                        setIsLoading(false);
-                        setNotification('AR Camera Ready! Look around to find Pokémon!');
                     }, 1000);
                     
                 } catch (error) {
@@ -487,7 +516,7 @@
             }
             
             async function catchPokemon() {
-                if (!currentTarget) return;
+                if (!currentTarget || !room) return;
                 
                 try {
                     await room.collection('caught_pokemon').create({
@@ -538,6 +567,21 @@
             const loadingEl = document.getElementById('loading');
             if (loadingEl) {
                 loadingEl.style.display = 'none';
+            }
+        });
+        
+        // Add error handling for AR.js
+        window.addEventListener('arjs-init', () => {
+            console.log('AR.js initialized successfully');
+        });
+        
+        // Handle AR.js errors
+        window.addEventListener('error', (event) => {
+            console.error('Error occurred:', event.error);
+            const notificationEl = document.getElementById('notification');
+            if (notificationEl) {
+                notificationEl.textContent = 'AR initialization failed. Please refresh the page.';
+                notificationEl.classList.add('show');
             }
         });
     </script>
